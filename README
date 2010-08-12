@@ -25,5 +25,13 @@ This script makes calendars under an admin account, shares those calendars with 
 them to the domain-wide addressbook. Then, for each "Fund Code" calendar, looks to see if there's any
 data for it; if so, adds any new events.
 
+** fundcodes_abook_cleanup.py **
+ * deleting domain-wide addresses
+ * domain-wide contacts query
+
+Ahem. Needed to clean up some extraneous addr book entries after some false starts with fundcodes.py. 
+This could be a start of an interesting utility if I ever expand it, maybe.
+And here you can watch me learn what list comprehensions are! You can do a map and a filter at the same time! yey.
+
 ** backup.py **
 (Coming soon) 
