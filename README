@@ -1,0 +1,29 @@
+I'll be pushing up scripts that we use for our EDU "Google Apps for your Domain" domain.
+Mostly, these are calendar and contacts scripts. 
+
+I was motivated to do this because I think the documentation for the domain-wide functions,
+especially for the python api, is not all that great. So the scripts I'm sharing are not all 
+that great, but I'm hoping that you'll find them useful as you harvest them for specific 
+syntax examples.
+
+See each script file for more info on each, but I'll summarize below.
+
+This is the first time I've ever used python, so if you see weird, non-python decisions happening, 
+it's not you, it's me.
+
+** fundcodes.py **
+ * accessing user-created calendar feeds to create events in non-default calendars
+ * creating domain-wide contacts
+ * sharing user-created calendars with the domain
+
+Solves a really silly situation - someone wanted expentiture data, which is currently produced by a 
+closed-source vendor application in a silly way, and stored in a silly place, to be put into Google
+Calendar. The expentiture data is updated biweekly, but put into cumulative files. Each code is in its
+own directory. Each code needs its own calendar.
+
+This script makes calendars under an admin account, shares those calendars with the domain, then adds 
+them to the domain-wide addressbook. Then, for each "Fund Code" calendar, looks to see if there's any
+data for it; if so, adds any new events.
+
+** backup.py **
+(Coming soon) 
