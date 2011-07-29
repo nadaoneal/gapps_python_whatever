@@ -12,6 +12,7 @@ every user's calendars via http. (to avoid API limits) Should be using oauth for
 instead; has other messy bits.
 
 The rest of the scripts have to do with a local "fund codes" application. 
+The application is written up here: http://hdl.handle.net/10022/AC:P:9978
 
 ** fundcodes.py **
  * accessing user-created calendar feeds to create events in non-default calendars
