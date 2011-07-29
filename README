@@ -6,20 +6,22 @@ especially for the python api, is not all that great. So the scripts I'm sharing
 that great, but I'm hoping that you'll find them useful as you harvest them for specific 
 syntax examples.
 
-See each script file for more info on each, but I'll summarize below.
+** backup.py **
+Backs up the domain-wide contact list, sets a temporary bypass htpasswd password in order to back up 
+every user's calendars via http. (to avoid API limits) Should be using oauth for the authentication 
+instead; has other messy bits.
 
-This is the first time I've ever used python, so if you see weird, non-python decisions happening, 
-it's not you, it's me.
+The rest of the scripts have to do with a local "fund codes" application. 
 
 ** fundcodes.py **
  * accessing user-created calendar feeds to create events in non-default calendars
  * creating domain-wide contacts
  * sharing user-created calendars with the domain
 
-Solves a really silly situation - someone wanted expenditure data, which is currently produced by a 
-closed-source vendor application in a silly way, and stored in a silly place, to be put into Google
-Calendar. The expenditure data is updated biweekly, but put into cumulative files. Each code is in its
-own directory. Each code needs its own calendar.
+Solves a specific situation - moves expenditure data for electonic resource renewals, currently stored in 
+text exports on a server to which I have limited access, into Google Calendar, and provides 3- and 5-month 
+reminders for next year's renewal. The expenditure data is updated biweekly, but put into cumulative files. 
+Each fund code is in its own directory. Each fund code needs its own calendar.
 
 This script makes calendars under an admin account, shares those calendars with the domain, then adds 
 them to the domain-wide addressbook. Then, for each "Fund Code" calendar, looks to see if there's any
@@ -30,8 +32,14 @@ data for it; if so, adds any new events.
  * domain-wide contacts query
 
 Ahem. Needed to clean up some extraneous addr book entries after some false starts with fundcodes.py. 
-This could be a start of an interesting utility if I ever expand it, maybe.
-And here you can watch me learn what list comprehensions are! You can do a map and a filter at the same time! yey.
 
-** backup.py **
-(Coming soon) 
+** emptycals.py **
+
+Empties all events from calendars whose titles are in a set you create, or that match a regex.
+This script is fairly old/messy; written while I was still very green.
+
+** listsub.py **
+
+Lists everyone who has subscribed to a "fund codes" calendar, and emails the list to interested parties.
+
+
