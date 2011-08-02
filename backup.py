@@ -7,8 +7,6 @@
 #    - subscribes _backup user to all resources (to ensure that rooms, etc get backed up)
 #    - sets random identical .htpasswd password for all current users (minus skipNames)
 #    - logs in via SAML to each user's account and downloads the exportical.zip file
-# Warning: the login url is hardcoded in the middle of the script - "THIS IS THE URL TO YOUR LOGIN PAGE".
-# Also search for "YOUR DOMAIN". Really terrible, I apologize. 
 #===============================================================================
 
 import time
@@ -16,6 +14,7 @@ import string
 import random
 import subprocess
 import sys
+import os
 
 import mechanize
 from pyparsing import makeHTMLTags,SkipTo
@@ -23,22 +22,10 @@ from pyparsing import makeHTMLTags,SkipTo
 import gdata.apps.service
 import gdata.contacts.service
 import gdata.calendar.service
-import gdata.calendar_resource.client
 
-#===============================================================================
-# To do still... 
-# (1) should really have try/catch around all writes to filesystem
-# (2) should email me when done, with log file
-# http://docs.python.org/library/email-examples.html
-# (3) should subscribe _backup automatically to all system resources
-# (4) Some kind of schedule for cleaning up old backups (meh)
-# (5) clean up redundant service creation (e.g. apps service happens 2+ times)
-# (6) Eventually... switch to oauth instead of this htpasswd nonsense
-# (7) set the cwd in a non-stupid way
-# (8) Get rid of hardcoded stuff
-#===============================================================================
-
+##############################################
 ## Google Apps Clients/Services Connections ##
+##############################################
 
 def openGoogleCalendarService(loginEmail, loginPass, googleSource):
     # open Calendar Service connection
@@ -60,67 +47,35 @@ def openGoogleContactsService(loginEmail, loginPass, googleSource):
     return contacts_service
 # end def OpenGoogleContactsService()
 
+## end Google Apps Clients/Services Connections ##
 
 
-def main():
-    #===============================================================================
-    # ### CONSTANTS/GLOBALS ###
-    #===============================================================================
-    
-    # skipNames: these names should not be backed up, and their passwords should not be touched
-    skipNames = frozenset(['xxxx', 'xxxxx'])
-    
-    # globals...
-    loginEmail = 'user@domain'
-    loginPass = 'somepassword'
-    loginDomain = 'domain'
-    googleSource = loginDomain + ".backup.script"
-    todaysDate = time.strftime('%Y-%m-%d')
-    contactsSaveFile = todaysDate + "/00-contacts.csv"
-    logSaveFile = todaysDate + "/00-log.txt"
-    scpHtpasswdTo = 'user@host:/path/.htpasswd' 
-    
-    # if debug is true, errors go to the screen; there may be additional errors, too
-    # if debug is false, everything is shunted to the log file 
-    debug = False
-    subprocess.call(['mkdir', todaysDate])
-    
-    if not debug: 
-        # open the log file
-        # dude, this seriously needs try/catch
-        subprocess.call(['touch', logSaveFile])
-        logOut = open(logSaveFile, 'a')
-        
-        # send all stdout and stderr to the log
-        sys.stdout = logOut
-        sys.stderr = logOut
-    
-    # start timer
-    timeStart = time.time()
-    print "Started at " + time.strftime('%Y-%m-%d %H:%M') + "\n"
-    
-    #===============================================================================
-    # Back up current list of shared global contacts
-    # super helpful: http://code.google.com/googleapps/domain/shared_contacts/gdata_shared_contacts_api_reference.html
-    #===============================================================================
+########################
+## Contacts Functions ##
+########################
+
+# formats Google's contact output, includes all email addresses
+def writeOutContacts(contactsFeed, contactsOut):
+    for entry in contactsFeed.entry:
+        if entry.title.text:
+            contactsOut.write(entry.title.text)
+            contactsOut.write(',')
+            for email in entry.email:
+                contactsOut.write(email.address + '\n')
+# end def writeOutContacts
+
+# connects to client and writes to saved file
+# super helpful: http://code.google.com/googleapps/domain/shared_contacts/gdata_shared_contacts_api_reference.html
+def backUpContacts(loginEmail, loginPass, loginDomain, contactsSaveFile, googleSource):
     gd_client = openGoogleContactsService(loginEmail, loginPass, googleSource)
     
     contactsOut = open(contactsSaveFile, 'w')
-    
-    def writeOutContacts(contactsFeed):
-        for entry in contactsFeed.entry:
-            if entry.title.text:
-                contactsOut.write(entry.title.text)
-                contactsOut.write(',')
-                for email in entry.email:
-                    contactsOut.write(email.address + '\n')
-    
     # need to use a query rather than a straight feed to get around return limits
-    contactsQuery = gdata.contacts.service.ContactsQuery(feed='http://www.google.com/m8/feeds/contacts/YOUR DOMAIN/full')
+    contactsFeed = 'http://www.google.com/m8/feeds/contacts/' + loginDomain + '/full'
+    contactsQuery = gdata.contacts.service.ContactsQuery(feed=contactsFeed)
     contactsQuery.max_results = 1000
                     
     try:
-        #contactsFeed = gd_client.GetContactsFeed('http://www.google.com/m8/feeds/contacts/YOUR DOMAIN/full')
         contactsFeed = gd_client.GetContactsFeed(contactsQuery.ToUri())
     except gdata.service.RequestError:
         try: 
@@ -133,14 +88,19 @@ def main():
             writeOutContacts(contactsFeed)
     else:
         print "Downloaded contact list at " + time.strftime('%H:%M') + ".\n"
-        writeOutContacts(contactsFeed)
+        writeOutContacts(contactsFeed, contactsOut)
     
     contactsOut.close()
-    if not debug:
-        logOut.flush()
-    
-    #===============================================================================
-    # Get full list of resources and subscribe _backup to all resources
+# end def backUpContacts
+
+## end Contacts Functions ##
+
+
+#########################
+## Resources Functions ##
+#########################
+
+    # Resources currently on ice
     # http://code.google.com/googleapps/domain/calendar_resource/docs/1.0/calendar_resource_developers_guide_protocol.html#retrieving_all_calendars
     # http://code.google.com/apis/calendar/data/2.0/reference.html#Calendar_feeds
     #===============================================================================
@@ -173,17 +133,23 @@ def main():
     #for a_resource in gresFeed.entry:
     #    a_calendar = gdata.calendar.CalendarListEntry()
     #    a_calendar.id = atom.Id(text=a_resource.GetResourceEmail())
+    #    # note: should the id be something liek http://www.google.com/calendar/feeds/default/allcalendars/full/apps.cul.columbia.edu_1i9d76i1ah8sk2ju23haqvvitk%40group.calendar.google.com ???
     #    returned_calendar = calendar_service.InsertCalendarSubscription(calendar=a_calendar)
     #    
     #    #print returned_calendar
     #    returned_calendar.hidden = gdata.calendar.Hidden(value='false')
     #    returned_calendar.selected = gdata.calendar.Selected(value='true')
     #    updated_calendar = calendar_service.UpdateCalendar(calendar=returned_calendar)
-    
-    #===============================================================================
-    # Get current list of users from Google
-    #===============================================================================
-    
+
+## end Resources Functions ##
+
+
+################################
+## Users / Accounts functions ##
+################################
+
+# returns list of active users, minus those in skipNames
+def returnUsersList(loginEmail, loginPass, loginDomain, skipNames):
     # login info
     gapps_service = gdata.apps.service.AppsService()
     gapps_service.email = loginEmail
@@ -205,14 +171,15 @@ def main():
             return False
     
     usersList = filter(filterUsers,userFeed.entry)
-    
-    
-    #===============================================================================
-    # For each user, set htpasswd to tonight's random password
-    #===============================================================================
-    
+    return usersList
+# end def returnUsersList
+
+# sets all users to tonight's random bypass password
+# this is possible because we're using a SAML authenticator that allows .htpasswd bypass
+# it would be better to use oauth
+def setRandomPassword(scpHtpasswdTo, usersList, loginUser, loginPass, logOut):
     # get current .htpasswd file from server
-    subprocess.call(['scp', scpHtpasswdTo, '.htpasswd'])
+    subprocess.call(['scp', scpHtpasswdTo, '.htpasswd'], stderr=logOut)
     
     # make a random password between 12 and 16 chars
     randMin = 12
@@ -221,65 +188,82 @@ def main():
     randomPassword = "".join(random.sample(string.letters+string.digits,random.randint(randMin,randMax)))
     
     # set new password for each user
-    for i, a_user in enumerate(usersList):
-        subprocess.call(["htpasswd", "-b", ".htpasswd", a_user.title.text, randomPassword])
+    for a_user in usersList:
+        subprocess.call(["htpasswd", "-b", ".htpasswd", a_user.title.text, randomPassword], stderr=logOut)
+    
+    # also set the backup user's pass to the correct thing
+    subprocess.call(["htpasswd", "-b", ".htpasswd", loginUser, loginPass], stderr=logOut)
         
     # upload back to server    
-    subprocess.call(['scp', '.htpasswd', scpHtpasswdTo])
+    subprocess.call(['scp', '.htpasswd', scpHtpasswdTo], stderr=logOut)
     
-    #===============================================================================
-    # Okay, now download a backup copy of the calendars for each user
-    #===============================================================================
-    
-    
-    def getUserCal(userName):
-        #logOut.flush()
-        samlResponseText = samlResponse.read()
-        theStart,theEnd = makeHTMLTags("textarea")
-        search = theStart + SkipTo(theEnd)("body")+ theEnd
-                
-        saml_resp_str = search.searchString(samlResponseText)[0].body
-        relay_state_str = search.searchString(samlResponseText)[1].body
-        
-        fileNametoSave = todaysDate + "/" + userName + ".zip"
-        
-        
-        br.select_form(name="acsForm")
-        br["SAMLResponse"] = saml_resp_str
-        br["RelayState"] = relay_state_str
-        try: 
-            newResponse = br.submit()
-            #print newResponse.read()
-        except:
-            print "WARN: trouble downloading cal data for " + userName + ": " +  " at " + time.strftime('%H:%M') + ".\n"
-            time.sleep(60)
-            try:
-                newResponse = br.submit()
-                #print newResponse.read()
-            except:
-                print "FAIL: can't get cal data for " + userName + ": " +  " at " + time.strftime('%H:%M') + ".\n"
-            else:
-                print "OKAY - second try - retrieving cal data for user " + userName + " at " + time.strftime('%H:%M') + ".\n"
-                br.retrieve('https://www.google.com/calendar/exporticalzip',fileNametoSave)   
-        else:
-            print "Retrieving cal data for user " + userName + " at " + time.strftime('%H:%M') + ".\n"
-            br.retrieve('https://www.google.com/calendar/exporticalzip',fileNametoSave)
+    return randomPassword
+
+## end Users / Accounts functions ##
+
+
+########################
+## Calendar Functions ##
+########################
+
+# post-login, gets the iCal zip file for specific user
+def getUseriCalZip(todaysDate, userName, samlResponse, br, logOut):
+    samlResponseText = samlResponse.read()
+    theStart,theEnd = makeHTMLTags("textarea")
+    search = theStart + SkipTo(theEnd)("body")+ theEnd
             
-    ###### end def getUserCal
+    saml_resp_str = search.searchString(samlResponseText)[0].body
+    relay_state_str = search.searchString(samlResponseText)[1].body
     
-    for a_user in (usersList):
-        userName = a_user.title.text
+    fileNametoSave = todaysDate + "/" + userName + ".zip"
+    
+    br.select_form(name="acsForm")
+    br["SAMLResponse"] = saml_resp_str
+    br["RelayState"] = relay_state_str
+    try: 
+        br.submit()
+    except:
+        print "WARN: trouble downloading cal data for " + userName + ": " +  " at " + time.strftime('%H:%M') + ".\n"
+        logOut.flush()
+        time.sleep(60)
+        try:
+            br.submit()
+        except:
+            print "FAIL: can't open cal session for " + userName + ": " +  " at " + time.strftime('%H:%M') + ".\n"
+            logOut.flush()
+        else:
+            print "OKAY - second try - retrieving cal data for user " + userName + " at " + time.strftime('%H:%M') + ".\n"
+            logOut.flush()
+            try: 
+                br.retrieve('https://www.google.com/calendar/exporticalzip',fileNametoSave) 
+            except:
+                print "FAIL: can't open cal session for " + userName + ": " +  " at " + time.strftime('%H:%M') + ".\n"
+                logOut.flush()
+    else:
+        print "Retrieving cal data for user " + userName + " at " + time.strftime('%H:%M') + ".\n"
+        logOut.flush()
+        try:
+            br.retrieve('https://www.google.com/calendar/exporticalzip',fileNametoSave)
+        except:
+            print "FAIL: can't download cal data for " + userName + ": " +  " at " + time.strftime('%H:%M') + ".\n"
+            logOut.flush()  
+###### end def getUseriCalZip
+
+# handles initial login to backup user calendar; calls getUseriCalZip for the rest
+def backupUserCal(userName, loginURL, randomPassword, todaysDate, logOut):
         br=mechanize.Browser()
         try:
-            br.open('THIS IS THE URL TO YOUR LOGIN PAGE')
+            br.open(loginURL)
         except:
             print "WARN: Trouble with initial connect for " + userName + ": " +  " at " + time.strftime('%H:%M') + ".\n"
+            logOut.flush()
             time.sleep(60)
             try:
-                br.open('THIS IS THE URL TO YOUR LOGIN PAGE')
+                br.open(loginURL)
             except:
                 print "FAIL: gave up on initial connect for " + userName + ": " +  " at " + time.strftime('%H:%M') + ".\n"
-                break
+                logOut.flush()
+                return
             
         br.select_form(name="theform")
         br['username']=userName
@@ -290,20 +274,98 @@ def main():
             samlResponse = br.submit()
         except:
             print "WARN: can't get past SAML for " + userName + ": " +  " at " + time.strftime('%H:%M') + ".\n"
+            logOut.flush()
             time.sleep(60)
             try:
                 samlResponse = br.submit()
             except:
                 print "FAIL: can't get past SAML for " + userName + ": " +  " at " + time.strftime('%H:%M') + ".\n"
+                logOut.flush()
             else:
                 print "OKAY: Login succeeded (second time) for " + userName + " at " + time.strftime('%H:%M') + ".\n"
-                getUserCal(userName) 
+                getUseriCalZip(todaysDate, userName, samlResponse, br, logOut) 
         else:
             print "Login succeeded for " + userName + " at " + time.strftime('%H:%M') + ".\n"
-            getUserCal(userName)
-            
-        #logOut.flush()
+            getUseriCalZip(todaysDate, userName, samlResponse, br, logOut)
+###### end def backupUserCal
+
+## end Calendar Functions ##
+
+
+                                            #############################
+                                            ##   ~~     main!    ~~    ##
+                                            #############################
+
+def main():
+    #===============================================================================
+    # Settings....
+    #===============================================================================
     
+    # skipNames: these names should not be backed up, and their passwords should not be touched
+    skipNames = frozenset(['xxxx', 'xxxxx'])
+    
+    # set working directory
+    os.chdir("/opt/cal-backup")
+    
+    # globals...
+    loginUser = 'USER'
+    loginPass = 'PASSWORD'
+    loginDomain = 'DOMAIN'
+    loginEmail = loginUser + '@' + loginDomain
+    loginURL = 'https://SOMEURL'
+    googleSource = loginDomain + ".backup.script"
+    todaysDate = time.strftime('%Y-%m-%d')
+    contactsSaveFile = todaysDate + "/00-contacts.csv"
+    logSaveFile = todaysDate + "/00-log.txt"
+    scpHtpasswdTo = 'USER@HOST:/PATH/TO/.htpasswd' 
+    
+    #===============================================================================
+    # Logging / Time... 
+    #===============================================================================
+    
+    # if debug is true, errors go to the screen; there may be additional errors, too
+    # if debug is false, everything is shunted to the log file 
+    debug = False
+
+    subprocess.call(['mkdir', todaysDate], stderr=subprocess.STDOUT)
+    subprocess.call(['touch', logSaveFile], stderr=subprocess.STDOUT)
+    logOut = open(logSaveFile, 'a')
+    
+    if not debug: 
+        # send all stdout and stderr to the log
+        # may be additional output below
+        sys.stdout = logOut
+        sys.stderr = logOut
+        subprocess.STDOUT = logOut
+    
+    # start timer
+    timeStart = time.time()
+    print "Started at " + time.strftime('%Y-%m-%d %H:%M') + "\n"
+    
+    #===============================================================================
+    # Back it all up...
+    #===============================================================================
+    
+    # Back up current list of shared global contacts
+    backUpContacts(loginEmail, loginPass, loginDomain, contactsSaveFile, googleSource)
+    
+    # Get full list of resources and subscribe _backup to all resources
+    # subscribeResources()
+
+    # Get current list of users from Google  
+    usersList = returnUsersList(loginEmail, loginPass, loginDomain, skipNames)
+
+    # For each user, set htpasswd to tonight's random password
+    # it would be better to use oauth
+    randomPassword = setRandomPassword(scpHtpasswdTo, usersList, loginUser, loginPass, logOut)
+
+    # Back up the backup user's calendar...
+    backupUserCal(loginUser, loginURL, loginPass, todaysDate, logOut)
+    
+    #  now download a backup copy of the calendars for each user
+    for a_user in (usersList):
+        backupUserCal(a_user.title.text, loginURL, randomPassword, todaysDate, logOut)
+        
     #===============================================================================
     #  clean up....
     #===============================================================================
@@ -312,11 +374,9 @@ def main():
     minutesElapsed = int((totalSecondsElapsed - hoursElapsed*3600) / 60)
     print 'Total time: %s hours, %s minutes (%s total seconds)' % (hoursElapsed, minutesElapsed, totalSecondsElapsed)
     
-    if not debug:
-        logOut.close()
+    logOut.close()
 # end def of main()
 
 
 if __name__ == '__main__':
     main()
-
