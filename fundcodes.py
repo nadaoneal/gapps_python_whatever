@@ -220,8 +220,12 @@ def populateCalendar(calendar, hostConnect, fundsBaseDir, calendar_service, star
             # also replace final \t and final ., if exists
             journal = eventData[3].replace("PAYMENT RECORD", "").replace("\[\]$","").replace("\.","")
             eventTitle = ' '.join([journal, eventData[8]])
-           
-            if line.rstrip() in googleEventSet:
+            
+            isNegative = (float(eventData[8]) < 0)
+            isBadTitle = isNegative and (bool(re.search("^COMMITMENTS",eventTitle)) or bool(re.search("^INTERNAL USE ONLY",eventTitle)))
+            
+            # don't add events if they have "bad titles" or if they're already entered 
+            if line.rstrip() in googleEventSet or isBadTitle:
                 pass
                 #print 'Skipping %s: %s on %s' % (calendar.title.text, eventTitle, eventDate)    
             else:
@@ -233,7 +237,8 @@ def populateCalendar(calendar, hostConnect, fundsBaseDir, calendar_service, star
                     print e
                     return False   
         
-            if reminders:
+            # don't add reminders for negative amounts
+            if reminders and not isNegative:
                     #print "adding reminder:"
                     origDate = datetime.date(int(eventDateRaw[0:4]), int(eventDateRaw[4:6]), int(eventDateRaw[6:8]))
                     
@@ -283,7 +288,8 @@ def populateCalendar(calendar, hostConnect, fundsBaseDir, calendar_service, star
           # end iterating over line in file content
            
 # end def populateCalendar()
-        
+
+ 
 ## helpers and filters for main() ##
 
 ## codesFilter v. codesFilterOnCal is a bit of an embarrassment, yeah. ha.
