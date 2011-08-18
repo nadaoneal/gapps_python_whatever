@@ -1,3 +1,14 @@
+Note: As of 2011-08-18, I'm creating a "gdata-api-v1" branch to store the code created against
+version 1 of the gdata python client. http://code.google.com/p/gdata-python-client/
+
+As soon as I get around to it, I'll be updating the main branch against version 2 of the client.
+
+See e.g. http://code.google.com/p/gdata-python-client/issues/detail?id=268#c27 for one of the many
+reasons to be using version 2 rather than version 1. (You'll note that there are many places in the 
+code where I create a loop, etc, to get around the 302 error issue.)
+
+***
+
 I'll be pushing up scripts that we use for our EDU "Google Apps for your Domain" domain.
 Mostly, these are calendar and contacts scripts. 
 
@@ -38,6 +49,11 @@ Ahem. Needed to clean up some extraneous addr book entries after some false star
 
 Empties all events from calendars whose titles are in a set you create, or that match a regex.
 This script is fairly old/messy; written while I was still very green.
+
+** selective_empty.py **
+
+Deletes selected events from selected calendars. Necessary when the app owners wanted to change the 
+business logic of which events were added to the calendar, and which got reminders.
 
 ** listsub.py **
 
