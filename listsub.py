@@ -1,95 +1,26 @@
 #!/usr/local/bin/python
 #===============================================================================
-# listsub.py: list everyone who has subscribed to a FundCodes calendar
+# listsub.py: 
+# list everyone who has subscribed to a calendar that looks like a fundcode
+# (title is nnnnE or nnnnEO)
 # then email some people about it
-# Please note that the script should be improved by 
-#    (a) using oath to authenticate to the users' acocunts
-#    (b) using Google's API to list user subscriptions - must be doable somehow
 #===============================================================================
 
 import time
+from datetime import datetime, timedelta
 import string
-import random
 import subprocess
 import sys
+import os
+import re
 
-import mechanize
-from pyparsing import makeHTMLTags,SkipTo
+from ConfigParser import SafeConfigParser
 
 import gdata.apps.service
+import gdata.calendar.client
 
 import smtplib
 from email.mime.text import MIMEText
-
-# getUserCal gets html that includes all the user's subscriptions. This is pretty silly. 
-# There should be some kind of API function.
-def getUserCal(userName, br, samlResponse, todaysDate):
-     samlResponseText = samlResponse.read()
-     theStart,theEnd = makeHTMLTags("textarea")
-     search = theStart + SkipTo(theEnd)("body")+ theEnd
-             
-     saml_resp_str = search.searchString(samlResponseText)[0].body
-     relay_state_str = search.searchString(samlResponseText)[1].body
-     
-     fileNametoSave = todaysDate + "/" + userName + ".html"
-     
-     br.select_form(name="acsForm")
-     br["SAMLResponse"] = saml_resp_str
-     br["RelayState"] = relay_state_str
-     try: 
-         br.submit()
-     except:
-         print "WARN: trouble downloading cal data for " + userName + ": " +  " at " + time.strftime('%H:%M') + ".\n"
-         time.sleep(60)
-         try:
-             br.submit()
-         except:
-             print "FAIL: can't get cal data for " + userName + ": " +  " at " + time.strftime('%H:%M') + ".\n"
-         else:
-             print "OKAY - second try - retrieving cal data for user " + userName + " at " + time.strftime('%H:%M') + ".\n"
-             br.retrieve('https://www.google.com/calendar/b/0/render',fileNametoSave)   
-     else:
-         print "Retrieving cal data for user " + userName + " at " + time.strftime('%H:%M') + ".\n"
-         br.retrieve('https://www.google.com/calendar/b/0/render',fileNametoSave)
-###### end def getUserCal
-
-# connectAndDownload handles the http connection nonsense
-def connectAndDownload(usersList, todaysDate, randomPassword):
-    for a_user in (usersList):
-        userName = a_user.title.text
-        br=mechanize.Browser()
-        try:
-            br.open('YOUR LOGIN PAGE')
-        except:
-            print "WARN: Trouble with initial connect for " + userName + ": " +  " at " + time.strftime('%H:%M') + ".\n"
-            time.sleep(60)
-            try:
-                br.open('YOUR LOGIN PAGE')
-            except:
-                print "FAIL: gave up on initial connect for " + userName + ": " +  " at " + time.strftime('%H:%M') + ".\n"
-                break
-            
-        br.select_form(name="theform")
-        br['username']=userName
-        br['password']=randomPassword
-        
-        # get SAML login response
-        try:
-            samlResponse = br.submit()
-        except:
-            print "WARN: can't get past SAML for " + userName + ": " +  " at " + time.strftime('%H:%M') + ".\n"
-            time.sleep(60)
-            try:
-                samlResponse = br.submit()
-            except:
-                print "FAIL: can't get past SAML for " + userName + ": " +  " at " + time.strftime('%H:%M') + ".\n"
-            else:
-                print "OKAY: Login succeeded (second time) for " + userName + " at " + time.strftime('%H:%M') + ".\n"
-                getUserCal(userName, br, samlResponse, todaysDate) 
-        else:
-            print "Login succeeded for " + userName + " at " + time.strftime('%H:%M') + ".\n"
-            getUserCal(userName, br, samlResponse, todaysDate)
-###### end def connectAndDownload
 
 def main():
     #===============================================================================
@@ -97,45 +28,51 @@ def main():
     #===============================================================================
     
     # skipNames: tech people, former employees, and service accounts - we don't care about them
-    skipNames = frozenset(['xxxx', 'xxxxx'])
+    skipNames = frozenset(['_backup', 'nco2104', 'jbw2137', 'eo33', 'pr339', '_sc_api', '_sc_api2', 'presentation_cul_user', 'cul', 'cornell'])
+    
+    # get settings from external file
+    config_file = 'settings.ini'
+    parser = SafeConfigParser()
+    parser.read(config_file)
+
+    # set working directory
+    # take default from settings or set something here
+    #baseDir = parser.get('settings', 'baseDir')
+    baseDir = "/opt/pytest"
+    os.chdir(baseDir)
     
     # logging, basics
     todaysDate = time.strftime('%Y-%m-%d')
-    logSaveFile = todaysDate + "/00-log.txt"
-    subprocess.call(['mkdir', todaysDate])
+    logSaveFile = todaysDate + "-fundcodes-subscribers.txt"
     subprocess.call(['touch', logSaveFile])
     logOut = open(logSaveFile, 'a')
     sys.stdout = logOut
     sys.stderr = logOut
     
-    # google settings...
-    loginEmail = 'xxx@DOMAIN'
-    loginPass = 'SOMEPASS'
-    loginDomain = 'DOMAIN'
-    googleSource = loginDomain + ".subscription.check.script"
+    # login info for non-oauth apis like provisioning...
+    loginUser = parser.get('settings', 'loginUser')
+    loginPass = parser.get('settings', 'loginPass')
+    loginDomain = parser.get('settings', 'loginDomain')
+    loginEmail = loginUser + '@' + loginDomain
+    loginURL = 'http://' + loginDomain
 
-    # using this to bypass the users' passwords
-    scpHtpasswdTo = 'USER@HOST:/PATH/.htpasswd'
-    
-    # grep the downloaded html files for subscriptions
-    grepCommand = 'cd ' + todaysDate + '; grep -H -e [0-9][0-9][0-9][0-9]E * | cut -f 1 -d "."; cd ..'
-    
-    # lookup command for getting names from the userids
-    lookupCommandPt1 = 'ssh USER@HOST \'lookup '
-    lookupCommandPt2 = '\' | grep Name | cut -c 12-'
+    # oath stuff
+    consumerKey = loginDomain
+    consumerSecret = parser.get('settings', 'oauth_secret')
+
+    # add googleSource
+    googleSource = loginDomain + ".list.fund.subscribers.script"
+
     
     # email settings for the message that goes out with a list of subscribers
     emailMsg = "Here's the latest list of people subscribed to at least one fund calendar. This is an automated message.\n\n"
-    msgFrom = "email@domain.com"
-    msgTo = "email@domain.com,email@domain.com"
-    msg = MIMEText(emailMsg)
-    msg['Subject'] = "Fundcode Calendar Subscribers"
-    msg['From'] = msgFrom
-    msg['To'] = msgTo
+    msgFrom = "nco2104@columbia.edu"
+    msgTo = "nco2104@columbia.edu"
+    msgSubject = "Fundcode Calendar Subscribers"
 
     # start timer
-    timeStart = time.time()
-    print "Started at " + time.strftime('%Y-%m-%d %H:%M') + "\n"
+    timeStart = datetime.now()
+    print "Started at " + timeStart.strftime("%Y-%m-%d %H:%M:%S") + "\n"
     
     #===============================================================================
     # Get current list of users from Google
@@ -158,47 +95,45 @@ def main():
         else:
             return False
     usersList = filter(filterUsers,userFeed.entry)
+    usersList.sort(key=lambda entry: entry.name.family_name)
     
     #===============================================================================
-    # For each user, set htpasswd to tonight's random password
-    # BETTER SOLUTION: use oauth here
+    # for each user in list, get list of all calendars. 
+    # If one of them is a fund code calendar, then the user is a match.
+    # Add the user to the email list; increment the number of subscribers
     #===============================================================================
     
-    # get current .htpasswd file from server
-    subprocess.call(['scp', scpHtpasswdTo, '.htpasswd'], stdout=logOut, stderr=logOut)
-    
-    # make a random password between 12 and 16 chars
-    randMin = 12
-    randMax = 16
-    # note: issue: using random.sample means every character in the password is unique
-    randomPassword = "".join(random.sample(string.letters+string.digits,random.randint(randMin,randMax)))
-    
-    # set new password for each user
-    for a_user in (usersList):
-        subprocess.call(["htpasswd", "-b", ".htpasswd", a_user.title.text, randomPassword], stdout=logOut, stderr=logOut)
+    totalSubscribers = 0
+    for googleUser in (usersList):
+        googleEmail = googleUser.title.text + '@' + loginDomain
+        subscribedCals = []
+        calendar_client = gdata.calendar.client.CalendarClient(googleSource)
+        calendar_client.auth_token = gdata.gauth.TwoLeggedOAuthHmacToken(consumerKey, consumerSecret, googleEmail)
+        feed = calendar_client.GetAllCalendarsFeed()
         
-    # upload back to server    
-    subprocess.call(['scp', '.htpasswd', scpHtpasswdTo], stdout=logOut, stderr=logOut)
-     
+        # for each calendar, check if it looks like a fund code
+        for a_calendar in (feed.entry):
+            if a_calendar.title is not None and re.search("^[0-9]*EO?$", a_calendar.title.text):
+                subscribedCals.append(a_calendar.title.text)
+
+        # if they're subscribed to at least one, increment totalSubscribers and append line to email message
+        if len(subscribedCals) > 0:
+            subscribedCals.sort()
+            totalSubscribers += 1
+            fullName = googleUser.name.given_name + " " + googleUser.name.family_name
+            emailMsg += '%s. %s: %s \n\t(%s)\n' % (totalSubscribers, googleUser.title.text, fullName, ", ".join(subscribedCals))
+          
     #===============================================================================
-    # Okay, now get a page of everything every user is subscribed to
-    # BETTER: use API to get this list
+    #  Append total to subject and send message...
     #===============================================================================
 
-    connectAndDownload(usersList, todaysDate, randomPassword)
+    print emailMsg
 
-    #===============================================================================    
-    # now grep the HTML files for the list of subscriptions
-    # and email results to interested parties
-    #===============================================================================
-    results = subprocess.check_output(grepCommand, shell=True, stderr=subprocess.STDOUT)
-    for i, uni in enumerate(results.splitlines()):
-        lookupUNI = lookupCommandPt1 + uni + lookupCommandPt2
-        name = subprocess.check_output(lookupUNI, shell=True, stderr=subprocess.STDOUT)
-        emailMsg += '%s. %s: %s\n' % (i+1, uni, name.strip())
-    # for log
-    print '%s. %s: %s\n' % (i+1, uni, name.strip())
-        
+    msg = MIMEText(emailMsg)
+    msg['Subject'] = msgSubject + " (%s total)" % (totalSubscribers)
+    msg['From'] = msgFrom
+    msg['To'] = msgTo
+
     s = smtplib.SMTP('localhost')
     s.sendmail(msgFrom, [msgTo], msg.as_string())
     s.quit()
@@ -206,10 +141,12 @@ def main():
     #===============================================================================
     #  clean up....
     #===============================================================================
-    totalSecondsElapsed = time.time() - timeStart
-    hoursElapsed = int(totalSecondsElapsed / 3600)
-    minutesElapsed = int((totalSecondsElapsed - hoursElapsed*3600) / 60)
-    print 'Total time: %s hours, %s minutes (%s total seconds)' % (hoursElapsed, minutesElapsed, totalSecondsElapsed)
+    timeEnd = datetime.now()
+    timeElapsed = timeEnd - timeStart
+    hoursElapsed = int(timeElapsed.seconds / 3600)
+    minutesElapsed = int((timeElapsed.seconds - hoursElapsed*3600) / 60)
+    print "Ended at " + timeEnd.strftime("%Y-%m-%d %H:%M:%S") + "\n"
+    print 'Total time: %s hours, %s minutes (%s total seconds)' % (hoursElapsed, minutesElapsed, timeElapsed.seconds)
 
     logOut.close()
 # end def of main()

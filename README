@@ -1,11 +1,9 @@
 Note: As of 2011-08-18, I'm creating a "gdata-api-v1" branch to store the code created against
 version 1 of the gdata python client. http://code.google.com/p/gdata-python-client/
 
-As soon as I get around to it, I'll be updating the main branch against version 2 of the client.
+The main branch is now tested against version 2.14 with the patch described in http://code.google.com/p/gdata-python-client/issues/detail?id=268#c27 manually added. There are still a number of places where the code is unfortunately a bit rough. 
 
-See e.g. http://code.google.com/p/gdata-python-client/issues/detail?id=268#c27 for one of the many
-reasons to be using version 2 rather than version 1. (You'll note that there are many places in the 
-code where I create a loop, etc, to get around the 302 error issue.)
+Additionally, there are a number of places where I'm still using calendar.service instead of calendar.client because it seems like .service gives you access to domain-wide functions where .client doesn't. So I'm also using contacts service instead of contacts client, apps service, etc. It's a little annoying because the authentication is clumsier - now that I know how to do it, it would be easier to use oauth, with .client, everywhere.
 
 ***
 
@@ -17,10 +15,29 @@ especially for the python api, is not all that great. So the scripts I'm sharing
 that great, but I'm hoping that you'll find them useful as you harvest them for specific 
 syntax examples.
 
+*** 
+
+FILES:
+
+** settings.ini.changeme **
+
+Rename this to settings.ini, put it someplace nice - all the other programs can refer to it. (Thanks, ConfigParser!)
+
 ** backup.py **
 Backs up the domain-wide contact list, sets a temporary bypass htpasswd password in order to back up 
-every user's calendars via http. (to avoid API limits) Should be using oauth for the authentication 
-instead; has other messy bits.
+every user's calendars via http. (to avoid API limits) Backup.py has been less-rewritten than other scripts below, and is a bit messier/crappier.
+
+** subscribe.py **
+Subscribes everyone (except accounts you exclude) on the domain to a given calendar. Doesn't have any user interaction, probably should.
+
+** abook_audit.py **
+ * deleting domain-wide addresses
+ * domain-wide contacts query
+ * has user interaction
+
+To delete addresses out of the domain-wide address book. (You will need this if e.g. fundcodes.py below creates extraneous calendars). The 1.0 branch version was specific to fund codes - this version takes a string (a regex, really) from the command line, shows you all the matching entries, verifies that you want to delete before proceeding.
+
+*** 
 
 The rest of the scripts have to do with a local "fund codes" application. 
 The application is written up here: http://hdl.handle.net/10022/AC:P:9978
@@ -39,24 +56,16 @@ This script makes calendars under an admin account, shares those calendars with 
 them to the domain-wide addressbook. Then, for each "Fund Code" calendar, looks to see if there's any
 data for it; if so, adds any new events.
 
-** fundcodes_abook_cleanup.py **
- * deleting domain-wide addresses
- * domain-wide contacts query
-
-Ahem. Needed to clean up some extraneous addr book entries after some false starts with fundcodes.py. 
+** listsub.py **
+ * what calendars are users subscribed to?
+Finds all users subscribed to a Fund Code calendar, emails interested people.
 
 ** emptycals.py **
 
 Empties all events from calendars whose titles are in a set you create, or that match a regex.
-This script is fairly old/messy; written while I was still very green.
+This script is fairly old/messy.
 
-** selective_empty.py **
+** selective-empty.py **
 
 Deletes selected events from selected calendars. Necessary when the app owners wanted to change the 
 business logic of which events were added to the calendar, and which got reminders.
-
-** listsub.py **
-
-Lists everyone who has subscribed to a "fund codes" calendar, and emails the list to interested parties.
-
-

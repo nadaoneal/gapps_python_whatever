@@ -4,11 +4,11 @@
 # fundcodes.py: populates "fund code" calendars with expenditure data
 #                 from files located on a hostile server
 #
-# There are a couple of crazy-seeming decisions in this program, mostly relating
-# to the way that data is extracted out of the "cumfile.xls" files (actually
-# tab-delimited files). Ssh and grep and wtf?? Just ignore all that.
+# The script connects to an export directory on another server, which essentially
+# has one sub-directory per calendar-which-needs-to-exist. Each sub-dir has
+# an export file, where some lines in the files should turn into events in the calendar.
 #
-# For the rest - script gets a list of calendars that need to exist, and the list
+# The script generates a list of calendars that need to exist, and the list
 # of currently existing calendars. Creates all calendars that do not currently
 # exist, shares them with the domain, and populates the global shared address book with them. 
 # This allows users to easily subscribe to these "private" calendars.
@@ -18,36 +18,48 @@
 #
 #===============================================================================
 
+#standard modules included with python
 import time
-import datetime
+from datetime import datetime, timedelta
 import string
+import re
 import random
 import subprocess
-from subprocess import Popen, PIPE, STDOUT
 import sys
-import re
+import os
+from subprocess import Popen, PIPE, STDOUT
 
+# you may need to install these modules
 import mechanize
 from pyparsing import makeHTMLTags,SkipTo
-
+from ConfigParser import SafeConfigParser
 import atom
-import gdata.data
+
+# tested against gdata-2.0.14
+# http://code.google.com/p/gdata-python-client/
+# http://code.google.com/p/gdata-python-client/source/browse/samples/oauth/TwoLeggedOAuthExample.py
 import gdata.apps.service
+import gdata.calendar.client
+import gdata.contacts.client
 import gdata.contacts.service
 import gdata.calendar.service
 import gdata.calendar_resource.client
+import gdata.gauth
 
-## Google Apps Clients/Services Connections ##
+########################
+## Contacts Functions ##
+########################
 
-def openGoogleCalendarService(loginEmail, loginPass, googleSource):
-    # open Calendar Service connection
-    calendar_service = gdata.calendar.service.CalendarService()
-    calendar_service.email = loginEmail
-    calendar_service.password = loginPass
-    calendar_service.source = googleSource
-    calendar_service.ProgrammaticLogin()
-    return calendar_service
-# end def OpenGoogleCalendarService()
+def addToContactsList(contacts_client, new_name, new_email, postUrl):
+    new_contact = gdata.contacts.ContactEntry(title=atom.Title(text=new_name))
+    new_contact.email.append(gdata.contacts.Email(address=new_email, primary='true', rel=gdata.contacts.REL_WORK))
+    try: 
+        contact_entry = contacts_client.CreateContact(new_contact,postUrl)
+    except gdata.service.RequestError, e:
+        print "Unable to create contact " + new_name
+        print e
+# end def addToContactsList
+
 
 def openGoogleContactsService(loginEmail, loginPass, googleSource):
     # open Contacts Service connection
@@ -60,64 +72,89 @@ def openGoogleContactsService(loginEmail, loginPass, googleSource):
 # end def OpenGoogleContactsService()
 
 
-## Google Apps Operations ##
-# adds calendar addr to global address book
-def addToContactsList(contacts_service, new_name, new_email, postUrl):
-    new_contact = gdata.contacts.ContactEntry(title=atom.Title(text=new_name))
-    new_contact.email.append(gdata.contacts.Email(address=new_email, primary='true', rel=gdata.contacts.REL_WORK))
-    try: 
-        contact_entry = contacts_service.CreateContact(new_contact,postUrl)
-    except gdata.service.RequestError, e:
-        print "Unable to create contact " + new_name
-        print e
-# end def addToContactsList
+
+########################
+## Calendar Functions ##
+########################
+
+def openGoogleCalendarService(loginEmail, loginPass, googleSource):
+    # open Calendar Service connection
+    calendar_service = gdata.calendar.service.CalendarService()
+    calendar_service.email = loginEmail
+    calendar_service.password = loginPass
+    calendar_service.source = googleSource
+    calendar_service.ProgrammaticLogin()
+    return calendar_service
+# end def OpenGoogleCalendarService()
+
+
+# codesFilter looks returns only the codes that should be made into calendars
+# currently, codes ending in E or EO
+def codesFilter(item):
+    if item is not None and re.search("^[0-9]*EO?$", item) : 
+        return True
+    else:
+        return False
+# end def codesFilter()
+
+# returns a set
+def returnFundCalsSet(calendar_client):
+    calsFeed = calendar_client.GetAllCalendarsFeed()
     
+    # there's also a weird bug where sometimes cal.title is None
+    # so keeping this inefficiency for now until I figure that out
+    def convertCalFeedtoNameSet(calsFeed):
+        nameList = []
+        for cal in calsFeed.entry:
+            if cal.title is not None:
+                nameList.append(cal.title.text)
+        nameList = filter(codesFilter, nameList)
+        return set(nameList)    
+    # end def convertCalFeedtoNameSet()
+    
+    convertedCalsSet = convertCalFeedtoNameSet(calsFeed)
+    return convertedCalsSet
+# end def returnFundCalsSet()
+
 # creates calendar, shares with the domain, and also adds to address book
-def newFundCalendar(fundName, loginDomain, postUrl, calendar_service, contacts_service):
+def newFundCalendar(fundName, loginDomain, postUrl, calendar_client, contacts_service):
         # 1. create calendar
-        calendar = gdata.calendar.CalendarListEntry()
-        calendar.title = atom.Title(text=fundName)
-        calendar.hidden = gdata.calendar.Hidden(value='false')
+        calendar = gdata.calendar.data.CalendarEntry()
+        calendar.title = atom.data.Title(text=fundName)
+        calendar.hidden = gdata.calendar.data.HiddenProperty(value='false')
         print "Creating " + fundName
         try:
-            new_calendar = calendar_service.InsertCalendar(new_calendar=calendar)
-        except gdata.service.RequestError, e:
-            print "Error creating calendar %s \n %s" % (fundName, e)
-            matchObj = re.search(r'The document has moved \<A HREF="(.*)"\>here\</A\>',str(e))
-            if matchObj:
-                calendar = matchObj.group(1)
-                print "Trying again: calendar is now %s\n" % (calendar)
-                try:
-                   new_calendar = calendar_service.InsertCalendar(new_calendar=calendar)
-                except gdata.service.RequestError, e:
-                    print "Failed again; giving up on %s \n %s" % (fundName,e)
-                    return
-            else:
-                "Problem does not seem to be 302 error - giving up on %s" (fundName)
-                return
+            new_calendar = calendar_client.InsertCalendar(new_calendar=calendar)
+        except:
+            print "Error creating calendar %s \n" % (fundName)
+            return
         
         # 1.5 get the newly created calendar's acl list id
         # note: cal.id.text looks like:
         # http://www.google.com/calendar/feeds/default/owncalendars/full/apps.cul.columbia.edu_letters12345numbers%40group.calendar.google.com
         # we want : https://www.google.com/calendar/feeds/letters12345numbers%40group.calendar.google.com/acl/full/
-        print "calendar name is " + fundName
+        print "new calendar name is " + fundName
         calendar_id = new_calendar.id.text
-        calendar_id = calendar_id.replace("http://www.google.com/calendar/feeds/default/owncalendars/full/","")
-        print "calendar id is " + calendar_id
+        calendar_id = calendar_id.replace("http://www.google.com/calendar/feeds/default/calendars/","")
+        print "new calendar id is " + calendar_id
         acl_list_id = "".join(["https://www.google.com/calendar/feeds/", calendar_id, "/acl/full/"])
-        print "acl list id is " + acl_list_id
+        print "new acl list id is " + acl_list_id
         
         # 2. share calendar with the domain
         shareWithDomain = loginDomain + '_@domain.calendar.google.com'
-        rule = gdata.calendar.CalendarAclEntry()
-        rule.scope = gdata.calendar.Scope(value=shareWithDomain, scope_type="user")
-        roleValue = 'http://schemas.google.com/gCal/2005#%s' % ('read')
-        rule.role = gdata.calendar.Role(value=roleValue)
-        aclUrl = acl_list_id
-        try:
-            returned_rule = calendar_service.InsertAclEntry(rule, aclUrl)
-        except gdata.service.RequestError, e:
-            print "Error setting ACL on %s \n %s" % (fundName, e)
+
+        # ... need to retrieve current rule, then update it
+        feed = calendar_client.GetCalendarAclFeed(acl_list_id)
+        for i, a_rule in enumerate(feed.entry):
+            if ( a_rule.scope.type == "domain" and a_rule.scope.value == loginDomain ):
+                a_rule.scope = gdata.acl.data.AclScope(value=loginDomain, type="domain")
+                roleValue = 'http://schemas.google.com/gCal/2005#%s' % ('read')
+                a_rule.role = gdata.acl.data.AclRole(value=roleValue)
+                try:
+                    updated_rule = calendar_client.Update(a_rule)
+                except gdata.service.RequestError, e:
+                    print "Error setting ACL on %s \n %s" % (fundName, e[0]['body'])
+                break
         
         # 3. append to contacts list
         new_name = "Fund Code " + fundName
@@ -126,9 +163,25 @@ def newFundCalendar(fundName, loginDomain, postUrl, calendar_service, contacts_s
         try:
             addToContactsList(contacts_service, new_name, new_email, postUrl)
         except gdata.service.RequestError, e:
-            print "Error appending %s to Contacts List \n %s" % (fundName, e)
+            print "Error appending %s to Contacts List \n %s" % (fundName, e[0]['body'])
         
 # end def NewFundCalendar()
+
+
+# gets list of cals to populate
+def getCalsToPopulate(calendar_client):
+    calsFeed = calendar_client.GetAllCalendarsFeed()
+    
+    def codesFilterOnCal(item):
+        if item is not None and item.title is not None and re.search("^[0-9]*EO?$", item.title.text) : 
+            return True
+        else:
+            return False
+    
+    allCalsList = filter(codesFilterOnCal,calsFeed.entry)
+    return allCalsList
+# end def getCalsToPopulate()
+
 
 # inserts an event, given a title, description, and date:
 # date like YYYY-mm-dd
@@ -141,7 +194,7 @@ def insertEvent(calendar_service, calFeed, title, description, date):
     try:
         new_event = calendar_service.InsertEvent(event, calFeed)
     except gdata.service.RequestError, e:
-        print "Got RequestError: \n%s\n\n If 302, trying again with redirect...\n" % (e)
+        print "Got RequestError: \n%s\n\n If 302, trying again with redirect...\n" % (e[0]['body'])
         matchObj = re.search(r'The document has moved \<A HREF="(.*)"\>here\</A\>',str(e)) 
         if matchObj:
             calFeed = matchObj.group(1)
@@ -156,17 +209,11 @@ def insertEvent(calendar_service, calFeed, title, description, date):
         print "Title is %s \n Date is %s \n Desc is \n %s \n XML is: %s \n\n" % (title, date, description, event)
 # end def insertEvent() 
 
-def populateCalendar(calendar, hostConnect, fundsBaseDir, calendar_service, start_date, end_date, reminders=False):
-        ## add reminders testing set
-        #addReminders = frozenset(['2462E', '2462EO', '2463E', '2463EO', '2464E', \
-        #                          '2464EO', '2465E', '2465EO', '2377E', '2377EO'])
-        #if calendar.title.text in addReminders:
-        #    reminders=True
-                
-        calFeed = ''.join(['/calendar/feeds/', calendar.id.text.replace('http://www.google.com/calendar/feeds/default/allcalendars/full/', ''), '/private/full'])
+def populateCalendar(calendar, hostConnect, fundsBaseDir, calendar_service, start_date, end_date, reminders=False):                
+        calFeed = ''.join(['/calendar/feeds/', calendar.id.text.replace('http://www.google.com/calendar/feeds/default/calendars/', ''), '/private/full'])
         print "%s: %s" % (calendar.title.text, calFeed)
         
-        calID = calendar.id.text.replace('http://www.google.com/calendar/feeds/default/allcalendars/full/', '').replace('%40','@')
+        calID = calendar.id.text.replace('http://www.google.com/calendar/feeds/default/calendars/', '').replace('%40','@')
         # find the text file
         cmd = ''.join(["ssh ", hostConnect, " 'ls -t ", fundsBaseDir,  \
                                    calendar.title.text, " | grep cumfile.xls'"])
@@ -189,6 +236,7 @@ def populateCalendar(calendar, hostConnect, fundsBaseDir, calendar_service, star
         # read line by line and then split each line on the tab char
 
         # get all current events from the calendar
+        # this is using the calendar service instead of the client
         query = gdata.calendar.service.CalendarEventQuery(calID, 'private', 'full')
         query.start_min = start_date
         query.start_max = end_date 
@@ -197,18 +245,21 @@ def populateCalendar(calendar, hostConnect, fundsBaseDir, calendar_service, star
             feed = calendar_service.CalendarQuery(query)
         except gdata.service.RequestError, e:
             print "failed first attempt to get event list of" + calendar.title.text
-            print e
+            print e[0]['body']
             time.sleep(20)
             try:
                 feed = calendar_service.CalendarQuery(query)
             except gdata.service.RequestError, e:
                 print "giving up on " + calendar.title.text
-                print e
+                print e[0]['body']
                 return False
             
         
         def returnEventDesc(event):
-            return event.content.text.rstrip()
+            returnText = "xxxxxxxxzzzzzzzzz-no-match"
+            if event is not None and event.content is not None and event.content.text is not None:
+                returnText = event.content.text.rstrip()
+            return returnText
         
         googleEventSet = set(map(returnEventDesc, feed.entry))
 
@@ -231,10 +282,11 @@ def populateCalendar(calendar, hostConnect, fundsBaseDir, calendar_service, star
             else:
                 print 'Adding %s: %s on %s' % (calendar.title.text, eventTitle, eventDate)
                 try:
+                    pass
                     insertEvent(calendar_service, calFeed, eventTitle, line, eventDate)
                 except gdata.service.RequestError, e:
                     print "Error adding event; skipping remainder"
-                    print e
+                    print e[0]['body']
                     return False   
         
             # don't add reminders for negative amounts
@@ -263,7 +315,7 @@ def populateCalendar(calendar, hostConnect, fundsBaseDir, calendar_service, star
                             insertEvent(calendar_service, calFeed, fmEventTitle, fmDescription, fourMonthsFormatted)
                         except gdata.service.RequestError, e:
                             print "Error adding event; skipping remainder"
-                            print e
+                            print e[0]['body']
                             return False  
                     
                     # "eight Months" reminder event
@@ -283,78 +335,63 @@ def populateCalendar(calendar, hostConnect, fundsBaseDir, calendar_service, star
                             insertEvent(calendar_service, calFeed, emEventTitle, emDescription, eightMonthsFormatted)
                         except gdata.service.RequestError, e:
                             print "Error adding event; skipping remainder"
-                            print e
+                            print e[0]['body']
                             return False                           
           # end iterating over line in file content
            
 # end def populateCalendar()
 
- 
-## helpers and filters for main() ##
-
-## codesFilter v. codesFilterOnCal is a bit of an embarrassment, yeah. ha.
-
-# codesFilter looks returns only the codes that should be made into calendars
-# currently, codes ending in E or EO
-def codesFilter(item):
-    if item is not None and re.search("^[0-9]*EO?$", item) : 
-        return True
-    else:
-        return False
-# end def codesFilter()
-
-# codesFilterOnCal is taking in calendar feed entry objects rather than strings
-# looks returns only the codes that should be made into calendars
-# currently, codes ending in E or EO
-def codesFilterOnCal(item):
-    if item is not None and item.title is not None and re.search("^[0-9]*EO?$", item.title.text) : 
-        return True
-    else:
-        return False
-# end def codesFilterOnCal()
 
 
-def returnFundCalsSet(calendar_service):
-    calsFeed = calendar_service.GetAllCalendarsFeed()
-    
-    # this is crappy, originally because I didn't realize that 
-    # calFeed.entry is the iterable object, not calFeed
-    # I would fix this, but there's also a weird bug where sometimes cal.title is None
-    # so keeping this inefficiency for now until I figure that out
-    def convertCalFeedtoNameSet(calsFeed):
-        nameList = []
-        for cal in calsFeed.entry:
-            if cal.title is not None:
-                nameList.append(cal.title.text)
-            else:
-                print "cal title was None..."
-                print cal.title
-        nameList = filter(codesFilter, nameList)
-        return set(nameList)    
-    # end def convertCalFeedtoNameSet()
-    
-    convertedCalsSet = convertCalFeedtoNameSet(calsFeed)
-    return convertedCalsSet
-# end def returnFundCalsSet()
 
-def getCalsToPopulate(calendar_service):
-    calsFeed = calendar_service.GetAllCalendarsFeed()
-    allCalsList = filter(codesFilterOnCal,calsFeed.entry)
-    return allCalsList
-# end def getCalsToPopulate()
+## end Calendar Functions ##
+
+                                            #############################
+                                            ##   ~~     main!    ~~    ##
+                                            #############################
 
 def main():
-    # domain/login details...
-    loginEmail = 'SOMEEMAIL@DOMAIN'
-    loginPass = 'SOMEPASSWORD'
-    loginDomain = 'SOMEDOMAIN'
+    #===============================================================================
+    # Settings
+    #===============================================================================
+    # get settings from external file
+    config_file = 'settings.ini'
+    parser = SafeConfigParser()
+    parser.read(config_file)
+
+    # set working directory
+    # take default from settings or set something here
+    #baseDir = parser.get('settings', 'baseDir')
+    baseDir = "/opt/pytest"
+    os.chdir(baseDir)
+    
+    # login info for non-oauth apis like provisioning...
+    loginUser = parser.get('settings', 'loginUser')
+    loginPass = parser.get('settings', 'loginPass')
+    loginDomain = parser.get('settings', 'loginDomain')
+    loginEmail = loginUser + '@' + loginDomain
+    loginURL = 'http://' + loginDomain
+    
+    # contacts stuff
     postUrl = "".join(["http://www.google.com/m8/feeds/contacts/",loginDomain,"/full"])
-    googleSource = loginDomain + '.fundcodes'
     
-    # getting-the-funds-list details
-    hostConnect = 'USERNAME@SERVER' 
-    fundsBaseDir = '/PATH/TO/FUNDS'
+    # oath stuff
+    consumerKey = loginDomain
+    consumerSecret = parser.get('settings', 'oauth_secret')
     
+    # logging info
+    todaysDate = time.strftime('%Y-%m-%d')
+    contactsSaveFile = todaysDate + "/00-contacts.csv"
+    logSaveFile = todaysDate + "/00-log.txt"
+    scpHtpasswdTo = parser.get('settings', 'scpHtpasswdTo') 
+    
+    # add googleSource
+    googleSource = loginDomain + ".subscribe.script"
+    
+    # data files location
+    hostConnect = 'nco2104@mimolette.cc.columbia.edu' 
+    fundsBaseDir = '/wwws/data/cu/libraries/inside/clio/statistics/acquisitions/fundcode/funds9/'
+
     # funds for which fiscal year?
     # this limits your query on the calendar when you check for previously created events
     # note: if you're adding reminders, add a year to the latter date
@@ -363,43 +400,54 @@ def main():
     
     # add in reminders?
     reminders = True
-        
-    # logging details
-    todaysDate = time.strftime('%Y-%m-%d')
-    logSaveFile = todaysDate + "/00-log.txt"
     
-    # Do you want messages to go to the screen (debug=True),
-    # or to the log file? (debug=False)
-    # debug also turns on some additional info
+    #===============================================================================
+    # Logging / Time... 
+    #===============================================================================
+
+    # if debug is true, errors go to the screen; there may be additional errors, too
+    # if debug is false, everything is shunted to the log file 
     debug = True
     
-    # open the log file, assuming you're not in debug mode
-    # send everything to the log file
-    # dude, this seriously needs try/catch
-    # why was I born so lazy?
-    if not debug:
-        subprocess.call(['mkdir', todaysDate])
-        subprocess.call(['touch', logSaveFile])
-        logOut = open(logSaveFile, 'a')
+    subprocess.call(['mkdir', todaysDate], stderr=subprocess.STDOUT)
+    subprocess.call(['touch', logSaveFile], stderr=subprocess.STDOUT)
+    logOut = open(logSaveFile, 'a')
+    
+    if not debug: 
         sys.stdout = logOut
         sys.stderr = logOut
+        subprocess.STDOUT = logOut
     
     # start timer
-    timeStart = time.time()
-    print "Started at " + time.strftime('%Y-%m-%d %H:%M')
+    timeStart = datetime.now()
+    print "Started at " + timeStart.strftime("%Y-%m-%d %H:%M:%S") + "\n"
     
-    # open calendar and contacts services
-    calendar_service = openGoogleCalendarService(loginEmail, loginPass, googleSource)
+    #===============================================================================
+    # Open Calendar Client, Contacts Service
+    #===============================================================================
+
+    calendar_client = gdata.calendar.client.CalendarClient(googleSource)
+    calendar_client.auth_token = gdata.gauth.TwoLeggedOAuthHmacToken(consumerKey, consumerSecret, loginEmail)
+
     contacts_service = openGoogleContactsService(loginEmail, loginPass, googleSource)
-        
-    # get listing of all current calendars that look like "Fund Code X"
-    currentCals = returnFundCalsSet(calendar_service)
+    calendar_service = openGoogleCalendarService(loginEmail, loginPass, googleSource)
+ 
+    #===============================================================================
+    # What calendars exist now?
+    #===============================================================================
     
-    # this only gets printed to screen, if debugging
-    if debug:
+    # get listing of all current calendars that look like "Fund Code X"
+    currentCals = returnFundCalsSet(calendar_client)
+    
+    # this only gets printed to screen if debugging
+    if False and debug:
         print "Current Calendars: \n"
         for i, a_calendar in enumerate(currentCals):
             print '\t%s. %s' % (i, a_calendar,)
+    
+    #===============================================================================
+    # What calendars should exist?
+    #===============================================================================    
     
     # get listing of all funds on disk that look like "*EO" or "*E"
     cmd = "".join(["ssh ", hostConnect, " 'ls ", fundsBaseDir, "'"])
@@ -412,10 +460,14 @@ def main():
     fundsSet = set(fundsList)
 
     # this only gets printed to screen, if ever
-    if False & debug:
+    if False and debug:
         print "\n\n Current Codes: \n"
         for i, mrstring in enumerate(fundsList):
             print '\t%s. %s' % (i, mrstring,)
+
+    #===============================================================================
+    # Create the difference
+    #===============================================================================  
 
     toCreate = fundsSet - currentCals
     
@@ -423,28 +475,36 @@ def main():
     print "\n\n To Create: \n"
     for i, mrstring in enumerate(toCreate):
         print '\t%s. %s' % (i, mrstring,)
-    
+
     ## Now, create all the calendars that need creating    
-    for fundName in toCreate:
-        newFundCalendar(fundName, loginDomain, postUrl, calendar_service, contacts_service)
-        
+    #for fundName in toCreate:
+    #    newFundCalendar(fundName, loginDomain, postUrl, calendar_client, contacts_service)
+
+    #===============================================================================
+    # Populate calendars with events
+    #===============================================================================  
+
     ## Get new list of current calendars (in case there were errors in creating)
-    calsToPopulate = getCalsToPopulate(calendar_service)
+    calsToPopulate = getCalsToPopulate(calendar_client)
     
     ## Next, populate each calendar with new events
     for calendar in calsToPopulate:
-        populateCalendar(calendar, hostConnect,fundsBaseDir, calendar_service, fiscalYearStart, fiscalYearEnd, reminders)
-    
-    #### clean up...
-    totalSecondsElapsed = time.time() - timeStart
-    hoursElapsed = int(totalSecondsElapsed / 3600)
-    minutesElapsed = int((totalSecondsElapsed - hoursElapsed*3600) / 60)
-    print "Total time: %s hours, %s minutes (%s total seconds)\n\n" % (hoursElapsed, minutesElapsed, totalSecondsElapsed)
-    if not debug:
-        logOut.close()
+        populateCalendar(calendar, hostConnect, fundsBaseDir, calendar_service, fiscalYearStart, fiscalYearEnd, reminders)
 
+
+
+    #===============================================================================
+    #  clean up....
+    #===============================================================================
+    timeEnd = datetime.now()
+    timeElapsed = timeEnd - timeStart
+    hoursElapsed = int(timeElapsed.seconds / 3600)
+    minutesElapsed = int((timeElapsed.seconds - hoursElapsed*3600) / 60)
+    print "Ended at " + timeEnd.strftime("%Y-%m-%d %H:%M:%S") + "\n"
+    print 'Total time: %s hours, %s minutes (%s total seconds)' % (hoursElapsed, minutesElapsed, timeElapsed.seconds)
+    
+    logOut.close()
 # end def of main()
 
-
 if __name__ == '__main__':
-  main()
+    main()    

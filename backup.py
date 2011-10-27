@@ -9,19 +9,24 @@
 #    - logs in via SAML to each user's account and downloads the exportical.zip file
 #===============================================================================
 
+# base python
 import time
+from datetime import datetime, timedelta
 import string
 import random
 import subprocess
 import sys
 import os
 
+# you may need to install these
+from ConfigParser import SafeConfigParser
 import mechanize
 from pyparsing import makeHTMLTags,SkipTo
 
 import gdata.apps.service
 import gdata.contacts.service
 import gdata.calendar.service
+import gdata.calendar.client
 
 ##############################################
 ## Google Apps Clients/Services Connections ##
@@ -302,45 +307,58 @@ def main():
     #===============================================================================
     
     # skipNames: these names should not be backed up, and their passwords should not be touched
-    skipNames = frozenset(['xxxx', 'xxxxx'])
+    skipNames = frozenset(['_sc_api', '_sc_api2', 'presentation_cul_user', 'cul', 'cornell', '_backup'])
     
+    # get settings from external file
+    config_file = '/opt/pytest/settings.ini'
+    parser = SafeConfigParser()
+    parser.read(config_file)
+
     # set working directory
     os.chdir("/opt/cal-backup")
-    
-    # globals...
-    loginUser = 'USER'
-    loginPass = 'PASSWORD'
-    loginDomain = 'DOMAIN'
+
+    # login info for non-oauth apis like provisioning...
+    loginUser = parser.get('settings', 'loginUser')
+    loginPass = parser.get('settings', 'loginPass')
+    loginDomain = parser.get('settings', 'loginDomain')
     loginEmail = loginUser + '@' + loginDomain
-    loginURL = 'https://SOMEURL'
+    loginURL = 'http://' + loginDomain
+    
+    # for resetting users' SAML passwords
+    scpHtpasswdTo = parser.get('settings', 'scpHtpasswdTo')
+    
+    # oath stuff (not in use at the moment)
+    consumerKey = loginDomain
+    consumerSecret = parser.get('settings', 'oauth_secret')
+
+    # add googleSource
     googleSource = loginDomain + ".backup.script"
+    
+    # where to save files
     todaysDate = time.strftime('%Y-%m-%d')
     contactsSaveFile = todaysDate + "/00-contacts.csv"
     logSaveFile = todaysDate + "/00-log.txt"
-    scpHtpasswdTo = 'USER@HOST:/PATH/TO/.htpasswd' 
-    
+        
     #===============================================================================
     # Logging / Time... 
     #===============================================================================
-    
+
     # if debug is true, errors go to the screen; there may be additional errors, too
     # if debug is false, everything is shunted to the log file 
     debug = False
-
+    
     subprocess.call(['mkdir', todaysDate], stderr=subprocess.STDOUT)
     subprocess.call(['touch', logSaveFile], stderr=subprocess.STDOUT)
     logOut = open(logSaveFile, 'a')
     
     if not debug: 
-        # send all stdout and stderr to the log
-        # may be additional output below
         sys.stdout = logOut
         sys.stderr = logOut
         subprocess.STDOUT = logOut
     
     # start timer
-    timeStart = time.time()
-    print "Started at " + time.strftime('%Y-%m-%d %H:%M') + "\n"
+    timeStart = datetime.now()
+    print "Started at " + timeStart.strftime("%Y-%m-%d %H:%M:%S") + "\n"
     
     #===============================================================================
     # Back it all up...
@@ -369,14 +387,15 @@ def main():
     #===============================================================================
     #  clean up....
     #===============================================================================
-    totalSecondsElapsed = time.time() - timeStart
-    hoursElapsed = int(totalSecondsElapsed / 3600)
-    minutesElapsed = int((totalSecondsElapsed - hoursElapsed*3600) / 60)
-    print 'Total time: %s hours, %s minutes (%s total seconds)' % (hoursElapsed, minutesElapsed, totalSecondsElapsed)
+    timeEnd = datetime.now()
+    timeElapsed = timeEnd - timeStart
+    hoursElapsed = int(timeElapsed.seconds / 3600)
+    minutesElapsed = int((timeElapsed.seconds - hoursElapsed*3600) / 60)
+    print "Ended at " + timeEnd.strftime("%Y-%m-%d %H:%M:%S") + "\n"
+    print 'Total time: %s hours, %s minutes (%s total seconds)' % (hoursElapsed, minutesElapsed, timeElapsed.seconds)
     
     logOut.close()
 # end def of main()
-
 
 if __name__ == '__main__':
     main()

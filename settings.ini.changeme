@@ -1,0 +1,16 @@
+## enter your usernames, passwords, etc as needed here
+## this file is formatted per ConfigParser conventions
+## http://www.doughellmann.com/PyMOTW/ConfigParser/
+
+[settings]
+# set working directory - may be overwritten by script
+baseDir = /some/default/directory
+
+# login info...
+loginUser = backupUserName
+loginPass = backupUserPass
+loginDomain = your.domain.com
+
+scpHtpasswdTo = user@host.domain.com:/path/to/.htpasswd 
+
+oauth_secret = yourOauthSecret
