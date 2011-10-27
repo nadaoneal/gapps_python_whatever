@@ -20,7 +20,7 @@
 
 #standard modules included with python
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import string
 import re
 import random
@@ -219,7 +219,7 @@ def populateCalendar(calendar, hostConnect, fundsBaseDir, calendar_service, star
                                    calendar.title.text, " | grep cumfile.xls'"])
         p = Popen(cmd, shell=True, stdin=PIPE, stdout=PIPE, stderr=STDOUT, close_fds=True)
         fileName = p.stdout.read()
-
+        #fileName = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT)
         
         # there may be no directory with this calendar name. If so, return 0
         # this happens when e.g. a code is discontinued
@@ -231,7 +231,7 @@ def populateCalendar(calendar, hostConnect, fundsBaseDir, calendar_service, star
         # only need "expenditure" lines, if any
         cmd = ''.join(["ssh ", hostConnect, " 'grep expenditure ", fundsBaseDir, \
                         calendar.title.text, "/", fileName, "'"])
-        p = Popen(cmd, shell=True, stdin=PIPE, stdout=PIPE, stderr=STDOUT, close_fds=True)
+        p =  subprocess.Popen(cmd, shell=True, stdin=PIPE, stdout=PIPE, stderr=STDOUT)
         fileContent = p.stdout.readlines()
         # read line by line and then split each line on the tab char
 
@@ -277,8 +277,8 @@ def populateCalendar(calendar, hostConnect, fundsBaseDir, calendar_service, star
             
             # don't add events if they have "bad titles" or if they're already entered 
             if line.rstrip() in googleEventSet or isBadTitle:
-                pass
-                #print 'Skipping %s: %s on %s' % (calendar.title.text, eventTitle, eventDate)    
+                #pass
+                print 'Skipping %s: %s on %s' % (calendar.title.text, eventTitle, eventDate)    
             else:
                 print 'Adding %s: %s on %s' % (calendar.title.text, eventTitle, eventDate)
                 try:
@@ -292,15 +292,15 @@ def populateCalendar(calendar, hostConnect, fundsBaseDir, calendar_service, star
             # don't add reminders for negative amounts
             if reminders and not isNegative:
                     #print "adding reminder:"
-                    origDate = datetime.date(int(eventDateRaw[0:4]), int(eventDateRaw[4:6]), int(eventDateRaw[6:8]))
+                    origDate = date(int(eventDateRaw[0:4]), int(eventDateRaw[4:6]), int(eventDateRaw[6:8]))
                     
                     # will expire a year from now
-                    willExpireOn = origDate + datetime.timedelta(days=365)
+                    willExpireOn = origDate + timedelta(days=365)
                     willExpireOnFormatted = willExpireOn.strftime("%m/%d/%Y")
                     
                     # four Months reminder event 
                     # when you have 5 months left to renew
-                    fourMonths = origDate + datetime.timedelta(days=212)
+                    fourMonths = origDate + timedelta(days=212)
                     fourMonthsFormatted = fourMonths.strftime("%Y-%m-%d")
                     fmEventTitle = ' '.join(["renew", eventTitle, "by", willExpireOnFormatted])
                     fmDescription = ' '.join(["(five months reminder)", line])
@@ -320,7 +320,7 @@ def populateCalendar(calendar, hostConnect, fundsBaseDir, calendar_service, star
                     
                     # "eight Months" reminder event
                     # when you have 3 months left to renew
-                    eightMonths = origDate + datetime.timedelta(days=274)
+                    eightMonths = origDate + timedelta(days=274)
                     eightMonthsFormatted = eightMonths.strftime("%Y-%m-%d")
                     emEventTitle = ' '.join(["renew", eventTitle, "by", willExpireOnFormatted])
                     emDescription = ' '.join(["(three months reminder)", line])                   
@@ -355,14 +355,14 @@ def main():
     # Settings
     #===============================================================================
     # get settings from external file
-    config_file = 'settings.ini'
+    config_file = '/opt/fundcodes/settings.ini'
     parser = SafeConfigParser()
     parser.read(config_file)
 
     # set working directory
     # take default from settings or set something here
-    #baseDir = parser.get('settings', 'baseDir')
-    baseDir = "/opt/pytest"
+    baseDir = parser.get('settings', 'baseDir')
+    #baseDir = "/opt/pytest"
     os.chdir(baseDir)
     
     # login info for non-oauth apis like provisioning...
@@ -381,8 +381,7 @@ def main():
     
     # logging info
     todaysDate = time.strftime('%Y-%m-%d')
-    contactsSaveFile = todaysDate + "/00-contacts.csv"
-    logSaveFile = todaysDate + "/00-log.txt"
+    logSaveFile = todaysDate + "-fundcodes.log"
     scpHtpasswdTo = parser.get('settings', 'scpHtpasswdTo') 
     
     # add googleSource
@@ -405,18 +404,14 @@ def main():
     # Logging / Time... 
     #===============================================================================
 
-    # if debug is true, errors go to the screen; there may be additional errors, too
-    # if debug is false, everything is shunted to the log file 
     debug = True
     
-    subprocess.call(['mkdir', todaysDate], stderr=subprocess.STDOUT)
     subprocess.call(['touch', logSaveFile], stderr=subprocess.STDOUT)
     logOut = open(logSaveFile, 'a')
     
-    if not debug: 
-        sys.stdout = logOut
-        sys.stderr = logOut
-        subprocess.STDOUT = logOut
+    sys.stdout = logOut
+    sys.stderr = logOut
+    #subprocess.STDOUT = logOut
     
     # start timer
     timeStart = datetime.now()
@@ -453,6 +448,7 @@ def main():
     cmd = "".join(["ssh ", hostConnect, " 'ls ", fundsBaseDir, "'"])
     p = Popen(cmd, shell=True, stdin=PIPE, stdout=PIPE, stderr=STDOUT, close_fds=True)
     output = p.stdout.read()
+    #output = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT)
 
     # now filter this output
     fundsList = output.split('\n')
@@ -477,8 +473,8 @@ def main():
         print '\t%s. %s' % (i, mrstring,)
 
     ## Now, create all the calendars that need creating    
-    #for fundName in toCreate:
-    #    newFundCalendar(fundName, loginDomain, postUrl, calendar_client, contacts_service)
+    for fundName in toCreate:
+        newFundCalendar(fundName, loginDomain, postUrl, calendar_client, contacts_service)
 
     #===============================================================================
     # Populate calendars with events
@@ -490,8 +486,6 @@ def main():
     ## Next, populate each calendar with new events
     for calendar in calsToPopulate:
         populateCalendar(calendar, hostConnect, fundsBaseDir, calendar_service, fiscalYearStart, fiscalYearEnd, reminders)
-
-
 
     #===============================================================================
     #  clean up....
